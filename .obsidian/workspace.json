@@ -1,0 +1,176 @@
+{
+  "main": {
+    "id": "65a7b011d00a79fe",
+    "type": "split",
+    "children": [
+      {
+        "id": "2a1dfda52ad4fd79",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "dc80958e90c4be58",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "MIT6.S081/Lab1 Xv6 and Unix utilities.md",
+                "mode": "source",
+                "source": false
+              }
+            }
+          },
+          {
+            "id": "76528c4d446e6321",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "MIT6.S081/XV6 book/XV6-book 阅读笔记.md",
+                "mode": "source",
+                "source": false
+              }
+            }
+          }
+        ],
+        "currentTab": 1
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "0f640711dcf4ec9f",
+    "type": "split",
+    "children": [
+      {
+        "id": "392cfe71f1a07c7a",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "987836ac7af2fbac",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical"
+              }
+            }
+          },
+          {
+            "id": "a083f9a769b61490",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              }
+            }
+          },
+          {
+            "id": "1b955e253854ac73",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {}
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "2c9b7a3a32366fbb",
+    "type": "split",
+    "children": [
+      {
+        "id": "8172a67e825a261a",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "ecbcb78b906bdc40",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "MIT6.S081/XV6 book/XV6-book 阅读笔记.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              }
+            }
+          },
+          {
+            "id": "d44352d80d07dca4",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "MIT6.S081/XV6 book/XV6-book 阅读笔记.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              }
+            }
+          },
+          {
+            "id": "14a7cb216e585be9",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true
+              }
+            }
+          },
+          {
+            "id": "e4876809aeeac982",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "MIT6.S081/XV6 book/XV6-book 阅读笔记.md"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:打开快速切换": false,
+      "graph:查看关系图谱": false,
+      "canvas:新建白板": false,
+      "daily-notes:打开/创建今天的日记": false,
+      "templates:插入模板": false,
+      "command-palette:打开命令面板": false
+    }
+  },
+  "active": "76528c4d446e6321",
+  "lastOpenFiles": [
+    "MIT6.S081/XV6 book/Pasted image 20230711215725.png",
+    "MIT6.S081/XV6 book/Pasted image 20230711210052.png",
+    "MIT6.S081/XV6 book/XV6-book 阅读笔记.md",
+    "MIT6.S081/Lab1 Xv6 and Unix utilities.md",
+    "MIT6.S081/XV6 book",
+    "Pasted image 20230711202445.md",
+    "MIT6.S081/Pasted image 20230711202445.png",
+    "Pasted image 20230711202538.png.md",
+    "Pasted image 20230711202538.png",
+    "未命名.canvas",
+    "MIT6.S081"
+  ]
+}
