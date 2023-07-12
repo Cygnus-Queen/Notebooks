@@ -45,5 +45,36 @@ parent: child 1234 is done
 
 exec系统调用从存储在文件系统中加载新的内存映像替换调用进程的内存(可以理解为把一个程序替换为另一个程序)，一般搭配fork使用
 
+shell就是一个特殊的程序，当你在shell界面输入命令时，shell会fork一个子进程，然后使用exec将子进程的内存空间替换为你输入的命令的内存空间（也就是把子进程变成你想要执行的进程），如果内存空间不够，可以使用sbrk这一系统调用扩宽。
+
+如下方代码所示，主循环使用getcmd从用户那里读取一行输入。然后调用fork，创建shell进程的副本。父进程调用wait，而子进程运行该命令。
+```c
+	// Read and run input commands.  
+while(getcmd(buf, sizeof(buf)) >= 0){  
+	if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){  
+	// Chdir must be called by the parent, not the child.  
+	buf[strlen(buf)-1] = 0; // chop \n  
+	if(chdir(buf+3) < 0)  
+		fprintf(2, "cannot cd %s\n", buf+3);  
+		continue;  
+	}  
+	if(fork1() == 0)  
+		runcmd(parsecmd(buf));   //子进程执行指令
+	wait(0);  //父进程等待
+	}    
+	exit(0);  
+
+
+fork1(void)  {  
+	int pid;  
+	pid = fork();  
+	if(pid == -1)  
+		panic("fork");  
+	return pid;  
+}
+```
+
 
 ## I/O和文件描述符
+
+文件描述符是一个小整数，表示进程可以读取或写入的内核管理对象
