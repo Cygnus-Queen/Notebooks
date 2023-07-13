@@ -31,8 +31,7 @@
               }
             }
           }
-        ],
-        "currentTab": 1
+        ]
       }
     ],
     "direction": "vertical"
@@ -98,7 +97,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "MIT6.S081/XV6 book/XV6-book 阅读笔记.md",
+                "file": "MIT6.S081/Lab1 Xv6 and Unix utilities.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -115,7 +114,7 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "MIT6.S081/XV6 book/XV6-book 阅读笔记.md",
+                "file": "MIT6.S081/Lab1 Xv6 and Unix utilities.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               }
@@ -138,7 +137,7 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "MIT6.S081/XV6 book/XV6-book 阅读笔记.md"
+                "file": "MIT6.S081/Lab1 Xv6 and Unix utilities.md"
               }
             }
           }
@@ -159,11 +158,11 @@
       "command-palette:打开命令面板": false
     }
   },
-  "active": "76528c4d446e6321",
+  "active": "dc80958e90c4be58",
   "lastOpenFiles": [
+    "MIT6.S081/XV6 book/XV6-book 阅读笔记.md",
     "MIT6.S081/XV6 book/Pasted image 20230711215725.png",
     "MIT6.S081/XV6 book/Pasted image 20230711210052.png",
-    "MIT6.S081/XV6 book/XV6-book 阅读笔记.md",
     "MIT6.S081/Lab1 Xv6 and Unix utilities.md",
     "MIT6.S081/XV6 book",
     "Pasted image 20230711202445.md",
