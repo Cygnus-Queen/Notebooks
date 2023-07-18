@@ -26,6 +26,8 @@ init: starting sh
 
 ## 2. sleep指令
 
+**实验要求**：为 xv6 系统实现 UNIX 的 sleep 程序。你的 sleep 程序应该使当前进程暂停相应的时钟周期数，时钟周期数由用户指定。例如执行 sleep 100 ，则当前进程暂停，等待 100 个时钟周期后才继续执行。
+
 安装好xv6系统内核后，观察项目代码（我这里已经编译过，所以实际可能有所不同），可以发现用户态的代码聚集在user文件夹下，内核态的代码聚集在kernel文件夹下
 
 课程需要我们仿照user目录下的命令（例如ls），写一个sleep命令，在开始这个任务前，我们有一些前置工作需要完成
@@ -150,8 +152,74 @@ int main(int argc, char *argv[])
 
 ```
 
-因此按照要求完成sleep代码如下：
+按照要求完成sleep代码如下：
 ```c
+#include "kernel/types.h"
+#include "user/user.h"
 
-
+int main(int argc, char *argv[]){
+    if(argc != 2){
+        fprintf(2, "Usage: sleep <ticks>\n");
+        exit(1);
+    }
+    int ticks = atoi(argv[1]); 
+    sleep(ticks);
+    exit(0);
+}
 ```
+在目录下使用执行测试：./grade-lab-util sleep 
+结果如下：
+![[Pasted image 20230718234029.png]]
+
+## 3. pingpong
+
+**实验要求**：使用 UNIX 系统调用编写一个程序 pingpong ，在一对管道上实现两个进程之间的通信。父进程应该通过第一个管道给子进程发送一个信息 “ping”，子进程接收父进程的信息后打印 <pid>: received ping ，其中是其进程 ID 。然后子进程通过另一个管道发送一个信息 “pong” 给父进程，父进程接收子进程的信息然后打印 <pid>: received pong ，然后退出。
+
+**实验提示**：
+- 使用 pipe 创建管道。
+- 使用 fork 创建一个子进程。
+- 使用 read 从管道读取信息，使用 write 将信息写入管道。
+- 使用 getpid 获取当前 进程 ID 。
+- 将程序添加到 Makefile 中的 UPROGS 。
+- xv6 上的用户程序具有有限的库函数可供它们使用。你可以在 user/user.h 中查看，除系统调用外其他函数代码位于 user/ulib.c 、user/printf.c 、和 user/umalloc.c 中。
+
+**实验代码**
+```c
+int main(int argc, char *argv[]) {
+    int p[2];
+    int p1[2];
+    pipe(p);
+    pipe(p1);  //开启两个管道，p用于父进程向子进程传输，p1则相反
+    int pid = fork();
+    if (pid == 0) {  
+        close(p[1]);       //子进程关闭p的写入端，管道不能有多余的端口
+        char buf[10];  
+        read(p[0], buf, 10);  //利用p从父进程读取信息
+        printf("%d: received %s\n", getpid(), buf);  //打印读取到的信息
+        close(p[0]);  //关闭p的读取端，完成一次传输
+        close(p1[0]);  //子进程关闭p1的读取端，准备向父进程传输信息
+        write(p1[1], "ping", 4);  //写入信息
+        close(p1[1]);  //写入完成，关闭p1的写入端
+    } else {
+        close(p[0]);     //父进程关闭p的读取端，管道不能有多余的端口
+        write(p[1], "pong", 4);   //向子进程传输信息
+        close(p[1]);   //写入完成，关闭p的写入端口
+        close(p1[1]);    //关闭p1管道的写入端，准备从子进程读取信息
+        char buf1[10];  
+        read(p1[0], buf1, 10); //利用p1从子进程读取信息 
+        printf("%d: received %s\n", getpid(), buf1); 
+        close(p1[0]);  //读取完成，关闭读取端
+    }
+    exit(0);  //正常结束，退出
+}
+```
+
+整个实验其实是考察对管道的理解程度，让我们熟练应用管道
+
+
+## 3. primes
+
+
+
+
+
