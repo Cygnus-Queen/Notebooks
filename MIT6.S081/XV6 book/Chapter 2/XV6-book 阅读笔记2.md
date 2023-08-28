@@ -380,16 +380,16 @@ main()
 在执行完 start 函数后，开始执行 main 函数。首先，判断当前的 CPU 的 ID 是否为主 CPU（cpuid() == 0） 。
 
 如果是主 CPU ，则执行一系列的初始化操作，包括：
-- `consoleinit(); `的控制台初始化；
-- `printfinit(); `的打印模块初始化；
-- `kinit(); `和 `kvminit(); `的创建内核页表；
-- `kvminithart(); `的打开分页机制；
-- `procinit(); 的创建进程表；
-- `trapinit(); `和 `trapinithart();` 和` plicinit();` 的设置系统中断向量和系统中断初始化；
-- `plicinithart(); `的设备中断初始化；
-- `binit(); `和` iinit(); `的磁盘缓冲和磁盘节点的初始化；
-- `fileinit(); `的文件系统的初始化；
-- `virtio_disk_init(); `的磁盘初始化；
+- `consoleinit(); `控制台初始化；
+- `printfinit(); `打印模块初始化；
+- `kinit(); `和 `kvminit(); `创建内核页表；
+- `kvminithart(); `打开分页机制；
+- `procinit(); `创建进程表；
+- `trapinit(); `和 `trapinithart();` 和` plicinit();` 设置系统中断向量和系统中断初始化；
+- `plicinithart(); `设备中断初始化；
+- `binit(); `和` iinit(); `磁盘缓冲和磁盘节点的初始化；
+- `fileinit(); `文件系统的初始化；
+- `virtio_disk_init(); `磁盘初始化；
 - `userinit(); `创建第一个用户进程，第一个进程执行一个小程序 user/initcode.S ，该程序通过调用 exec 系统调用重新进入内核；
 - `sync_synchronize();` 是 gcc 提供的原子操作，保证内存访问的操作都是原子操作；
 - `started = 1;` 是设置初始化完成的标志。
@@ -402,5 +402,470 @@ main()
 以上函数的声明都包含在kernel/defs.h文件中。
 
 
-## 进程
+## 第一个用户进程
+
+从main.c代码中我们可以发现在启动第一个进程之前，还有很多准备工作。我们暂时不去看他们，先学习第一个进程对应的代码：
+```c
+// Set up first user process.  
+void  
+userinit(void)  
+{  
+  struct proc *p;    //新建进程的结构体
+  
+  p = allocproc();   //第一个进程分配空间等初始化步骤基本都在该函数中进行，具体看下文
+  initproc = p;  
+    
+  // allocate one user page and copy init's instructions  
+  // and data into it.  
+  uvminit(p->pagetable, initcode, sizeof(initcode));   
+  p->sz = PGSIZE;   //sz变量表示进程的最大内存空间
+  
+  // prepare for the very first "return" from kernel to user.  
+  // user program counter
+  //指令指针指向初始化代码的入口点，即地址0。
+  p->trapframe->epc = 0;  
+  // user stack pointer 
+  //栈指针被设置为虚拟空间最大值（初始化）
+  p->trapframe->sp = PGSIZE;  
+  
+  safestrcpy(p->name, "initcode", sizeof(p->name));   //设置进程的名称，方便调试
+  p->cwd = namei("/");   //指定进程的工作目录
+  
+  p->state = RUNNABLE;   //进程已经初始化完毕，修改状态，表示它可以被调度了
+  
+  release(&p->lock);   //完成对进程的操作，释放锁
+}
+```
+
+---
+
+这段代码内部完成了很多事情，把他拆开来看：
+
+**1. allocproc函数**（构建新进程）
+```c
+//进程表，NPROC表示支持的最大进程数量，xv6设置为64
+struct proc proc[NPROC];
+
+// Look in the process table for an UNUSED proc.  
+// If found, initialize state required to run in the kernel,  
+// and return with p->lock held.  
+// If there are no free procs, or a memory allocation fails, return 0.  
+static struct proc* 
+allocproc(void)  
+{  
+  struct proc *p;  
+
+	//proc是进程表，&proc[NPROC]是获取数组首地址，循环通过递增指针的方式遍历进程表
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);  //每个表格中的进程要加锁才能进行操作，同时该函数会关闭中断避免死锁
+    if(p->state == UNUSED) {   //寻找第一个state为UNUSED（未使用的）进程
+      goto found;   //找到空位，可以执行初始化进程的操作
+    } else {   
+      release(&p->lock);   //未找到空位，释放当前指针所指向进程的锁，然后继续循环寻找
+    }  
+  }  
+  return 0;  
+  
+found:   
+  p->pid = allocpid();   //为进程分配pid（进程的编号，唯一标识）
+  p->state = USED;   //将state设置为USED（已使用），state用于描述进程的状态
+  
+  // Allocate a trapframe page.  
+  //为进程分配trapframe（用于保存中断时的进程上下文），这个结构在中断章节会进一步讲解
+  //kalloc函数可以分配物理内存，失败则返回0，这里是
+  if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+    freeproc(p);   //如果分配失败，则将设置的pid等信息全部还原
+    release(&p->lock);   //释放锁
+    return 0;  
+  }  
+  
+  // An empty user page table.
+  p->pagetable = proc_pagetable(p);  //为进程分配页表
+  if(p->pagetable == 0){  
+    freeproc(p);  //如果分配失败，则将设置的pid等信息全部还原
+    release(&p->lock);   //释放锁
+    return 0;  
+  }  
+  
+  // Set up new context to start executing at forkret,  
+  // which returns to user space.  memset(&p->context, 0, sizeof(p->context));  
+  //context是保存内核中进程上下文切换时寄存器值的结构体
+  //当调用ret指令时，指令寄存器pc会被重置为ra寄存器所保存的地址
+  //进程调度切换上下文后会有ret指令，所以此处ra其实指定了CPU加载该进程后运行的程序是什么
+  p->context.ra = (uint64)forkret;   
+  p->context.sp = p->kstack + PGSIZE;   
+  //sp 栈指针,kstack是内核栈的地址，PGSIZE是常量，表示每个页的大小（4096 字节）
+
+  return p;  
+}
+```
+这是一个使用static修饰的函数，返回一个进程结构体指针的。static 常在两种情况下使用：
+1. 变量：static变量不会在函数重新进入时再次赋初值；不会在函数结束时而释放（存储在全局区）
+2. 函数：static函数只能在本文件中调用，不能在其他文件中调用
+
+函数的逻辑如下图：
+
+![[Pasted image 20230816182438.png]]
+在新建进程时有三个结构体非常重要，后续会进一步讲解，这里只需要知道它们是干什么的即可：
+1. 保存进程运行情况的trapframe（栈帧）
+2. 上下文切换时记录状态的context
+3. pagetable（页表）
+
+**2. 分配物理内存（虚拟地址映射）**
+
+在申请完进程结构体后，进程中保存的栈指针其实是个虚拟地址，让进程有自己在使用整个内存空间的错觉，其实要真正使用，还需要为进程分配真实的物理地址
+```c
+// Load the user initcode into address 0 of pagetable,  
+// for the very first process.  
+// sz must be less than a page.  
+void  
+uvminit(pagetable_t pagetable, uchar *src, uint sz)  
+{  
+  char *mem;  
+  
+  if(sz >= PGSIZE)  
+    panic("inituvm: more than a page");  
+  mem = kalloc();   //kalloc会分配一个4k大小的物理内存并返回指针
+  memset(mem, 0, PGSIZE);   //将物理内存初始化为0
+  //mappages将进程结构体中的虚拟内存pagetable映射到物理内存mem
+  mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);  
+  memmove(mem, src, sz);  //src指向位置的，大小为sz的内容，复制到mem指向的空间中
+}
+```
+上述代码涉及到虚拟内存和页表相关的知识，后续会进一步讨论
+
+--- 
+
+在介绍完第一个进程创建过程中非常重要的两个函数调用后，我们可以回头再看第一个进程初始化的代码：
+```c
+// Set up first user process.  
+void  
+userinit(void)  
+{  
+  struct proc *p;    //新建进程的结构体
+  
+  p = allocproc();   //第一个进程分配空间等初始化步骤基本都在该函数中进行，具体看下文
+  initproc = p;  
+    
+  // allocate one user page and copy init's instructions  
+  // and data into it.  
+  uvminit(p->pagetable, initcode, sizeof(initcode));   
+  p->sz = PGSIZE;   //sz变量表示进程的最大内存空间
+  
+  // prepare for the very first "return" from kernel to user.  
+  // user program counter
+  //指令指针指向初始化代码的入口点，即地址0（虚拟地址）。
+  p->trapframe->epc = 0;  
+  // user stack pointer 
+  //栈指针被设置为虚拟空间最大值（初始化），进行压栈操作，sp会减小（xv6的栈是倒着的）
+  p->trapframe->sp = PGSIZE;  
+  
+  safestrcpy(p->name, "initcode", sizeof(p->name));   //设置进程的名称，方便调试
+  p->cwd = namei("/");   //指定进程的工作目录
+  
+  p->state = RUNNABLE;   //进程已经初始化完毕，修改状态，表示它可以被调度了
+  
+  release(&p->lock);   //完成对进程的操作，释放锁
+}
+```
+上述代码中，完成了进程创建和虚拟地址映射两个操作后，剩下的就是对进程的细微调整
+1. 初始化栈帧的epc指针和sp指针
+2. 为进程命名
+3. 指定工作目录
+4. 修改进程状态为就绪态，随时等待CPU"宠幸"
+5. 完成对进程结构体的更改，释放锁
+
+然而完成了对第一个进程结构体的创建，不代表第一个进程已经运行起来了。我们还需要理解进程这个结构体是怎么运行起来的（如何被CPU使用）
+
+
+**2. scheduler（进程调度）**
+
+在main.c函数中，我们可以发现完成userinit后会调用scheduler()函数，这个函数是一个死循环：
+```c
+// Per-CPU process scheduler.  
+// Each CPU calls scheduler() after setting itself up.  
+// Scheduler never returns.  It loops, doing:  
+//  - choose a process to run.  
+//  - swtch to start running that process.  
+//  - eventually that process transfers control  
+//    via swtch back to the scheduler.  
+void  
+scheduler(void)  
+{  
+  struct proc *p;  
+  struct cpu *c = mycpu();  
+    
+  c->proc = 0;  
+  for(;;){  
+    // Avoid deadlock by ensuring that devices can interrupt.  
+    intr_on();  
+  
+    for(p = proc; p < &proc[NPROC]; p++) {  
+      acquire(&p->lock);  
+      if(p->state == RUNNABLE) {  
+        // Switch to chosen process.  It is the process's job  
+        // to release its lock and then reacquire it        // before jumping back to us.        p->state = RUNNING;  
+        c->proc = p;  
+        swtch(&c->context, &p->context); 
+  
+        // Process is done running for now.  
+        // It should have changed its p->state before coming back.        c->proc = 0;  
+      }  
+      release(&p->lock);  
+    }  
+  }  
+}
+```
+
+每个CPU都会执行这个代码，在初始化CPU结构体之后开始循环。具体的逻辑很容易理解：
+- 打开中断（在之前的操作中，中断是关闭的，在开始执行进程前要打开中断避免死锁）
+- 遍历进程表，找到就绪态的进程
+- 给进程上锁，运行进程
+- 运行结束，释放锁
+- 继续遍历
+
+可以发现核心代码就是循环体中的`swtch(&c->context, &p->context); `
+为什么把进程结构体的上下文和CPU结构体的上下文传入swtch就可以实现进程的切换了？
+```c
+# Context switch  
+#  
+#   void swtch(struct context *old, struct context *new);  
+#   
+# Save current registers in old. Load from new.      
+  
+  
+.globl swtch  
+swtch:  
+        sd ra, 0(a0)   //0(a0)的意思是a0寄存器的内容作为基址 + 0得到真正的地址
+        sd sp, 8(a0)  
+        sd s0, 16(a0)  
+        sd s1, 24(a0)  
+        sd s2, 32(a0)  
+        sd s3, 40(a0)  
+        sd s4, 48(a0)  
+        sd s5, 56(a0)  
+        sd s6, 64(a0)  
+        sd s7, 72(a0)  
+        sd s8, 80(a0)  
+        sd s9, 88(a0)  
+        sd s10, 96(a0)  
+        sd s11, 104(a0)  
+  
+        ld ra, 0(a1)  
+        ld sp, 8(a1)  
+        ld s0, 16(a1)  
+        ld s1, 24(a1)  
+        ld s2, 32(a1)  
+        ld s3, 40(a1)  
+        ld s4, 48(a1)  
+        ld s5, 56(a1)  
+        ld s6, 64(a1)  
+        ld s7, 72(a1)  
+        ld s8, 80(a1)  
+        ld s9, 88(a1)  
+        ld s10, 96(a1)  
+        ld s11, 104(a1)  
+          
+        ret
+```
+
+swtch函数其实是用汇编代码实现的（swtch.S），它的作用就是切换CPU运行时使用的寄存器的值，也就是进程的context结构体中记录的内容。具体来说，上面的代码就是实现了先保存现在寄存器的值到**a0寄存器**指向的位置，再加载新的值到**a1寄存器**指向的位置：
+- sd是指store doubleword，将寄存器的值存入存储器
+- ld则是load doubleword，将存储器的值加载进寄存器
+- ret指令，CPU会将PC重置为ra寄存器的值
+a0寄存器对应了swtch函数的第一个参数，是当前进程的context对象的地址，保存它的意义在于当前进程因为各种原因被调度走了，下次还可以在上次CPU中断的位置继续完成任务。
+a1寄存器对应了swtch函数的第二个参数，是即将要CPU执行的进程对应的context结构体地址
+
+注意：一般来说，ra寄存器存放目前进程代码执行到的位置，方便下一次CPU调度该进程时可以接着执行，但由于是第一个进程，ra寄存器实际指向了我们想要执行的第一个程序
+
+还记得吗？在新建第一个进程的时候，`p->context.ra = (uint64)forkret; ` 新进程的ra寄存器的值被设定为forkret函数的地址，所以第一个进程实际上会先完成forkret函数的工作
+```c
+// A fork child's very first scheduling by scheduler()  
+// will swtch to forkret.  
+void  
+forkret(void)  
+{  
+  static int first = 1;  
+  
+  // Still holding p->lock from scheduler.  
+  release(&myproc()->lock);  
+  
+  if (first) {  
+    // File system initialization must be run in the context of a  
+    // regular process (e.g., because it calls sleep), and thus cannot    // be run from main().    first = 0;  
+    fsinit(ROOTDEV);  
+  }  
+  
+  usertrapret();  
+}
+```
+
+forkret函数会初始化文件系统，注意：文件系统的初始化代码因为涉及到sleep系统调用，因此必须通过一个常规的进程运行，而不是再上文的main.c中进行
+
+完成初始化后，程序会执行usertrapret()函数，这是一个从内核态返回用户态的函数。
+```c
+//  
+// return to user space  
+//  
+void  
+usertrapret(void)  
+{  
+  struct proc *p = myproc();  
+  
+  // we're about to switch the destination of traps from  
+  // kerneltrap() to usertrap(), so turn off interrupts until  // we're back in user space, where usertrap() is correct.  intr_off();  
+  
+  // send syscalls, interrupts, and exceptions to trampoline.S  
+  w_stvec(TRAMPOLINE + (uservec - trampoline));  
+  
+  // set up trapframe values that uservec will need when  
+  // the process next re-enters the kernel.  p->trapframe->kernel_satp = r_satp();         // kernel page table  
+  p->trapframe->kernel_sp = p->kstack + PGSIZE; // process's kernel stack  
+  p->trapframe->kernel_trap = (uint64)usertrap;  
+  p->trapframe->kernel_hartid = r_tp();         // hartid for cpuid()  
+  
+  // set up the registers that trampoline.S's sret will use  // to get to user space.    // set S Previous Privilege mode to User.  
+  unsigned long x = r_sstatus();  
+  x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode  
+  x |= SSTATUS_SPIE; // enable interrupts in user mode  
+  w_sstatus(x);  
+  
+  // set S Exception Program Counter to the saved user pc.  
+  w_sepc(p->trapframe->epc);  
+  
+  // tell trampoline.S the user page table to switch to.  
+  uint64 satp = MAKE_SATP(p->pagetable);  
+  
+  // jump to trampoline.S at the top of memory, which   
+  // switches to the user page table, restores user registers,  
+  // and switches to user mode with sret.  uint64 fn = TRAMPOLINE + (userret - trampoline);  
+  ((void (*)(uint64,uint64))fn)(TRAPFRAME, satp);  
+}
+```
+
+这部分代码涉及到了中断的内容，会在后续章节学习，只需要知道：
+1. 在这段代码中先将内核层级设定为用户态
+2. 通过`w_sepc(p->trapframe->epc);  ` 设置PC（程序计数器）的值为寄存器中预先存好的值
+3. CPU因为从PC处执行指令，因此执行`p->trapframe->epc`指向的代码。
+
+在第一个进程中，epc指向虚拟地址0，该虚拟地址绑定的物理地址实际指向initcode
+```c
+// a user program that calls exec("/init")  
+// od -t xC initcode  
+uchar initcode[] = {  
+  0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02,  
+  0x97, 0x05, 0x00, 0x00, 0x93, 0x85, 0x35, 0x02,  
+  0x93, 0x08, 0x70, 0x00, 0x73, 0x00, 0x00, 0x00,  
+  0x93, 0x08, 0x20, 0x00, 0x73, 0x00, 0x00, 0x00,  
+  0xef, 0xf0, 0x9f, 0xff, 0x2f, 0x69, 0x6e, 0x69,  
+  0x74, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x00,  
+  0x00, 0x00, 0x00, 0x00  
+};
+```
+这其实是initcode二进制代码的十六进制显示，也就是说CPU要开始加载initcode代码
+
+也就是下面的汇编代码：
+```c
+# Initial process that execs /init.  
+# This code runs in user space.  
+  
+#include "syscall.h"  
+  
+# exec(init, argv)  
+.globl start  
+start:  
+        la a0, init    //la将一个内存地址的值加载到rd寄存器中
+        la a1, argv    
+        li a7, SYS_exec //li可以将任意的32位数据或者地址加载到指定的寄存器中
+        ecall  
+  
+# for(;;) exit();  
+exit:  
+        li a7, SYS_exit  
+        ecall  
+        jal exit  
+  
+# char init[] = "/init\0";  
+init:  
+  .string "/init\0"  
+  
+# char *argv[] = { init, 0 };  
+.p2align 2  
+argv:  
+  .long init  
+  .long 0
+```
+这段汇编代码的主要作用是触发系统调用exec（这个系统调用的作用前文已经讲过），执行名为init的程序（由user/init.c编译得到），如果exec失败，则循环运行一个不会返回的系统调用exit
+
+init的代码如下：
+```c
+// init: The initial user-level program  
+  
+#include "kernel/types.h"  
+#include "kernel/stat.h"  
+#include "kernel/spinlock.h"  
+#include "kernel/sleeplock.h"  
+#include "kernel/fs.h"  
+#include "kernel/file.h"  
+#include "user/user.h"  
+#include "kernel/fcntl.h"  
+  
+char *argv[] = { "sh", 0 };  
+  
+int  
+main(void)  
+{  
+  int pid, wpid;  
+  
+  if(open("console", O_RDWR) < 0){  
+    mknod("console", CONSOLE, 0);  
+    open("console", O_RDWR);  
+  }  
+  dup(0);  // stdout  
+  dup(0);  // stderr  
+
+  //启动shell
+  for(;;){  
+    printf("init: starting sh\n");   
+    pid = fork();  
+    if(pid < 0){  
+      printf("init: fork failed\n");  
+      exit(1);  
+    }  
+    if(pid == 0){  
+      exec("sh", argv);  
+      printf("init: exec sh failed\n");  
+      exit(1);  
+    }  
+
+	//shell启动成功，进入死循环，
+    for(;;){  
+      // this call to wait() returns if the shell exits,  
+      // or if a parentless process exits.      wpid = wait((int *) 0);  
+      if(wpid == pid){  
+        // the shell exited; restart it.  
+        break;  
+      } else if(wpid < 0){  
+        printf("init: wait returned an error\n");  
+        exit(1);  
+      } else {  
+        // it was a parentless process; do nothing.  
+      }  
+    }  
+  }  
+}
+```
+
+init会在需要的情况下创建一个新的控制台设备文件，然后把它作为描述符0，1，2打开。接下来它将不断循环，开启控制台 shell，处理没有父进程的僵尸进程，直到 shell 退出，然后再反复。系统就这样运行起来了。
+
+## 现实情况
+大多操作系统都采用了进程这个概念，而大多的进程都和 xv6 的进程类似。但是真正的操作系统会利用一个显式的链表在常数时间内找到空闲的 `proc`，而不像本文 `allocproc` 中那样花费线性时间；xv6 使用的是朴素的线性搜索，找第一个空闲的 `proc`（详情见前文的scheduler.c代码）。
+
+注意：xv6 的地址空间结构有一个缺点，即无法使用超过 2GB 的物理 RAM。当然我们可以解决这个问题，不过最好的解决方法还是使用64位的机器。
+
+
+## 结尾
+完成了对书籍第二章内容的阅读和扩展阅读，写成了这一篇笔记，在开始第三章学习之前，要先进入到系统调用相关的练习中了。
+
+感谢你能看到这里！幸苦了！！
 
