@@ -10,20 +10,39 @@
 2. **异常**：一条指令(用户或内核)做了一些非法的事情，如除以零或使用无效的虚拟地址。
 3. **中断**：当一个设备发出需要注意的信号时，例如当磁盘硬件完成一个读写请求时。
 
-所以研究系统调用，其实也就是研究中断（trap）过程是如何发生的。宏观上可分为四个步骤：
+所以研究系统调用，其实也就是研究中断（trap）过程是如何发生的。宏观上可分为四个步骤，本文会针对这四个步骤，结合xv6系统进行详细的讲解：
 1. 中断请求
 2. 保护现场
 3. 中断处理
 4. 中断返回
 
-以上过程自然离不开与寄存器打交道，以下是与trap相关的寄存器概述，不少寄存器已经在之前的文本阅读部分介绍过了：
-- `stvec`：内核在这里写下trap处理程序的地址；RISC-V跳转到这里来处理trap。
-- `sepc`：当trap发生时，RISC-V会将程序计数器保存在这里(因为`PC`会被`stvec`覆盖)。`sret`(从trap中返回)指令将`sepc`复制到`pc`中。内核可以写`sepc`来控制`sret`的返回到哪里。
-- `scause`：RISC -V在这里放了一个数字，描述了trap的原因。
-- `sscratch`：内核在这里放置了一个值，在trap处理程序开始时可以方便地使用。
-- `sstatus`：`sstatus`中的**SIE**位控制设备中断是否被启用，如果内核清除**SIE**，RISC-V将推迟设备中断，直到内核设置**SIE**。**SPP**位表示trap是来自用户模式还是supervisor模式，并控制`sret`返回到什么模式。
+以上过程自然离不开与寄存器打交道，以下是与trap相关的寄存器概述，不少寄存器已经在之前的文本阅读部分介绍过了。这些寄存器可以分为两类：
+**1. 发生中断时，硬件自动写入的寄存器**
+    -  `sepc`：当trap发生时，RISC-V会将程序计数器保存在这里(因为`PC`会被`stvec`覆盖)。`sret`(从trap中返回)指令将`sepc`复制到`pc`中。内核可以写`sepc`来控制`sret`的返回到哪里。
+    -  `scause`：RISC -V在这里放了一个数字，描述了trap的原因。
+    -  `stval`：`scause` 不足以存下中断所有的必须信息。例如缺页异常，就会将 `stval` 设置成需要访问但是不在内存中的地址，以便于操作系统将这个地址所在的页面加载进来。
 
-因此微观上，RISC-V硬件对每一个trap操作（除定时器中断外），都会执行的步骤如下：
+**2. 指导硬件处理中断的寄存器**
+    - `stvec`：保存内核中断处理流程的入口地址，内核在这里写下trap处理程序的地址；RISC-V跳转到这里来处理trap。
+    - `sstatus`：具有许多状态位，控制全局中断等。`sstatus`中的**SIE**位控制设备中断是否被启用，如果内核清除**SIE**，RISC-V将推迟设备中断，直到内核设置**SIE**。**SPP**位表示trap是来自用户模式还是supervisor模式，并控制`sret`返回到什么模式。
+    - `sie`：即 Supervisor Interrupt Enable，用来控制具体类型中断，例如其中的 STIE 控制时钟中断
+    - `sip`：即 Supervisor Interrupt Pending，和 `sie` 相对应，记录每种中断是否被触发。仅当 `sie` 和 `sip` 的对应位都为 1 时，意味着开中断且已发生中断，这时中断最终触发。
+    - `sscratch`：内核在这里放置了一个值，在trap处理程序开始时可以方便地使用。在用户态保存内核栈的地址，在内核态值为 0。为什么需要内核栈？因此中断处理流程也需要利用内存空间，很可能需要使用栈，而程序当前的用户栈是不安全的（说不定指针不断运行到其他进程的空间，破坏了隔离性）。因此，我们还需要一个预设的安全的栈空间，存放在这里。
+
+有了上述与中断相关的寄存器，自然也就有与中断相关的指令：
+**1. 进入和退出中断**
+    - `ecall`：触发中断，进入更高一层的中断处理流程之中。用户态进行系统调用进入内核态中断处理流程，内核态进行 SBI 调用进入机器态中断处理流程，使用的都是这条指令。
+    - `sret`：从内核态返回用户态，同时将 `sepc` 的值赋值给 `pc`。（如果需要返回到 `sepc` 后一条指令，就需要在 `sret` 之前修改 `sepc` 的值）
+    - `ebreak`：触发一个断电
+    - `mret`：从机器态返回内核态，同时将 `pc` 的值设置为 `mepc`。
+
+**2. 操作CSR**
+    只有一系列特殊的指令（CSR Instruction）可以读写 CSR
+    - `csrrw dst, csr, src`（CSR Read Write）同时读写的原子操作，将指定 CSR 的值写入 `dst`，同时将 `src` 的值写入 CSR。
+    - `csrr dst, csr`（CSR Read）：仅读取一个 CSR 寄存器。
+    - `csrw csr, src`（CSR Write）  ：仅写入一个 CSR 寄存器。
+
+微观上，RISC-V硬件对每一个trap操作（除定时器中断外），都会执行如下步骤：
 1. 如果该trap是设备中断，且sstatus SIE位为0，则不执行以下任何操作
 2. 通过清除 SIE 来禁用中断
 3. 复制 pc 到 sepc
@@ -39,11 +58,11 @@
 当使用到`write，read，open`等系统调用时，会使用`ecall`指令发起中断请求
 - `ecall`是RISC-V的一个可以控制寄存器的汇编指令，用于在运行时向环境发出请求，如系统调用
 
-具体来说，在xv6中，`user/cat.c`文件是`cat shell`指令的源码，涉及到的`read`函数，声明在`user/user.h`文件中，但是read函数的实现在`kernel/sysfile.c`文件中。显然`cat`并不是直接调用`sysfile.c`文件中的函数来达成目标的，毕竟一个在用户态，一个在内核态。
+在xv6中，`user/cat.c`文件是`cat shell`指令的源码，其中涉及到了`read`函数，它声明在`user/user.h`文件中，但是`read`函数的实现在`kernel/sysfile.c`文件中。显然`cat`并不是直接调用`sysfile.c`文件中的函数来达成目标的，毕竟一个在用户态，一个在内核态。
 
-所以其实此时最重要的一点就是如何建立用户态下`read`声明和内核态下`read`实现的桥梁。既然`read`在用户态的角度看不见具体的逻辑实现，但是只声明不实现的函数是无法正常使用的呀？
+既然`read`在用户态的角度看不见具体的逻辑实现，那它为什么能正常运行呢？只声明不实现的函数是无法正常使用的呀？
 
-仔细观察user文件架，我们可以发现虽然没有`read`函数的c语言实现，但其实存在汇编实现。用户在c代码中使用`read`函数时，具体是在运行`usys.S`文件（由`usys.pl`文件得来，make指令才能看见）中`read`函数。
+仔细观察user文件架，我们可以发现虽然没有`read`函数的c语言实现，但其实存在汇编实现。用户在c代码中使用`read`函数时，其实是在运行`usys.S`文件（由`usys.pl`文件得来，make指令才能看见）中`read`函数。
 ```
 c语言如何调用汇编函数？步骤：
 1、先在汇编程序中声明函数属性为GLOBAL
@@ -51,7 +70,7 @@ c语言如何调用汇编函数？步骤：
 3、按照C语言正常调用函数的方式调用该函数
 ```
 
-当然，这个汇编函数虽然名称也叫`read`，但并不是在执行读取文件的逻辑，而是在建立用户与内核的桥梁。`usys.pl`脚本的实现如下：
+当然，这个汇编函数虽然名称也叫`read`，但并不是在执行读取文件的逻辑，而是在建立用户态与内核态的桥梁。`usys.pl`脚本的实现如下：
 ```c
 #!/usr/bin/perl -w  
   
@@ -95,7 +114,7 @@ entry("uptime");
 
 `usys.pl`是一个Perl语言文件。即使对Perl语言并没有深入了解，但根据语法规则可以大概了解它的作用：这个脚本文件将根据输入的字符名，通过`entry()`格式化生成文本文件。
 
-实际上，`usys.pl`的输入是系统调用的名称，输出内容则保存为`kernel/usys.S`。这样每个系统调用都在`usys.S`文件中都有一个实现，通过`global`声明后，用户在使用同名的函数时，会执行这里的`entry()`中的逻辑：
+`usys.pl`的输入是系统调用的名称，输出内容则保存为`kernel/usys.S`。这样每个系统调用都在`usys.S`文件中都有一个实现，通过`global`声明后，用户在使用同名的函数时，会执行这里的`entry()`中的逻辑：
 1. 将系统调用的ID存入a7寄存器
     - 虽然输入的是名称（字符串），但是`kernel/syscall.h`文件下将字符串映射为了编号
 2. 执行ecall命令
@@ -112,12 +131,101 @@ entry("uptime");
 
 Xv6在内核页表和每个用户页表中的**同一个虚拟地址**上映射了 `trampoline page` 。`STVEC` 寄存器保存的地址是 `trampoline page` 的起始位置，主要执行一些保护用户态寄存器的操作。`trampoline page` 的首地址是 `uservec` 函数。所以其实STVEC指向了`kernel/trampoline.S`文件中的`uservec`函数。
 
-综上，其实操作系统伪装了一个系统调用的实现，当使用`read`等函数时并没有真正的读写逻辑，而是发起中断，并通过寄存器将函数的ID告知内核，方便内核找到函数真正的实现。
+**综上，其实操作系统伪装了一个系统调用的实现，当使用`read`等函数时并没有真正的读写逻辑，而是利用ecall发起中断，并通过寄存器将函数的ID告知内核，方便在内核找到函数真正的实现。**
 
 #### 保护现场
 
+上文讲到CPU将执行uservec函数（`kernel/trampoline.S`）
+```
+trampoline.S中其实只包含两个函数：
+1、uservec，负责
+```
+
+uservec的代码：
+```c
+.globl uservec  
+uservec:      
+   #  
+        # trap.c sets stvec to point here, so  
+        # traps from user space start here,  
+        # in supervisor mode, but with a  
+        # user page table.  
+        #  
+        # sscratch points to where the process's p->trapframe is  
+        # mapped into user space, at TRAPFRAME.  
+        #  
+        # swap a0 and sscratch  
+        # so that a0 is TRAPFRAME  
+        csrrw a0, sscratch, a0 
+  
+        # save the user registers in TRAPFRAME  
+        sd ra, 40(a0)  
+        sd sp, 48(a0)  
+        sd gp, 56(a0)  
+        sd tp, 64(a0)  
+        sd t0, 72(a0)  
+        sd t1, 80(a0)  
+        sd t2, 88(a0)  
+        sd s0, 96(a0)  
+        sd s1, 104(a0)  
+        sd a1, 120(a0)  
+        sd a2, 128(a0)  
+        sd a3, 136(a0)  
+        sd a4, 144(a0)  
+        sd a5, 152(a0)  
+        sd a6, 160(a0)  
+        sd a7, 168(a0)  
+        sd s2, 176(a0)  
+        sd s3, 184(a0)  
+        sd s4, 192(a0)  
+        sd s5, 200(a0)  
+        sd s6, 208(a0)  
+        sd s7, 216(a0)  
+        sd s8, 224(a0)  
+        sd s9, 232(a0)  
+        sd s10, 240(a0)  
+        sd s11, 248(a0)  
+        sd t3, 256(a0)  
+        sd t4, 264(a0)  
+        sd t5, 272(a0)  
+        sd t6, 280(a0)  
+  
+   # save the user a0 in p->trapframe->a0  
+        csrr t0, sscratch  
+        sd t0, 112(a0)  
+  
+        # restore kernel stack pointer from p->trapframe->kernel_sp  
+        ld sp, 8(a0)  
+  
+        # make tp hold the current hartid, from p->trapframe->kernel_hartid  
+        ld tp, 32(a0)  
+  
+        # load the address of usertrap(), p->trapframe->kernel_trap  
+        ld t0, 16(a0)  
+  
+        # restore kernel page table from p->trapframe->kernel_satp  
+        ld t1, 0(a0)  
+        csrw satp, t1  
+        sfence.vma zero, zero  
+  
+        # a0 is no longer valid, since the kernel page  
+        # table does not specially map p->tf.  
+  
+        # jump to usertrap(), which does not return  
+        jr
+```
+
+在进程的结构中有一个结构体变量名为trapframe，它的作用是：
+1. 发生中断时，保存进程在用户态使用的各种寄存器的值，以便于到时候恢复进程运行状态。
+2. 保存完成后，加载进程在内核态运行需要使用的寄存器的值
+
+在上面的代码中：
+1. 先使用csrrw指令，将a0寄存器设置为sscratch寄存器的值，此时a0指向进程的trapframe结构。按照特定的顺序，保存寄存器的值。从偏移量40开始是因为，0到40（5 * 8）之间保存了5个内核态相关的值`（kernel_satp，kernel_sp，kernel_trap，epc，kernel_hartid）`，具体可参考proc.h文件中trapframe的结构。
+2. 恢复内核栈指针，将5个内核态相关的值加载进寄存器中。执行jr。
+
+
+
+
+
+
 ## System call tracing
-
-
-
-
