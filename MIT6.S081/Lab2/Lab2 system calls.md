@@ -477,3 +477,200 @@ userret:
 随着`sret`指令的调用，整个中断过程完成，sepc寄存器中的值填回pc，用户程序恢复正常执行
 
 ## System call tracing
+
+
+参照教程，在实验2前应该：
+- 仔细阅读`Chapter 2、 Chapter 4 的 Sections 4.3 and 4.4`
+- 仔细阅读`user/user.h`,`user/usys.pl`，学习xv6中工具函数和系统调用原型
+- 仔细阅读`kernel/syscall.h`,`kernel/syscall.c`,系统调用实现
+- 仔细阅读`kernel/proc.h`,`kernel/proc.c`，进程代码实现
+
+如果是从前文一步一步看到这里，那么这些代码相当于已经看过了，下面直接看练习要求：
+```c
+实验要求：
+
+实现一个系统调用追踪的功能：trace mask command命令，
+- mask 表示系统调用号的掩码
+- command 表示命令
+- 能够实现如下效果
+
+//因由于read的系统调用号是5，因此（1 << 5,10000) 如果输入的数字从右往左第六位为1，则需要追踪read，即十进制数字32表示仅需要追踪read系统调用
+$ trace 32 grep hello README
+3: syscall read -> 1023
+3: syscall read -> 966
+3: syscall read -> 70
+3: syscall read -> 0
+
+//2147483647的二进制是1111111111111111111111111111111，因为所有位都为1，说明所有系统调用都需要追踪
+$ trace 2147483647 grep hello README
+4: syscall trace -> 0
+4: syscall exec -> 3
+4: syscall open -> 3
+4: syscall read -> 1023
+4: syscall read -> 966
+4: syscall read -> 70
+4: syscall read -> 0
+4: syscall close -> 0
+
+//没有trace指令，不追踪，不能影响其他程序的正常运行
+$ grep hello README
+$
+
+//fork的系统调用号是1，因此(1 << 2，2)如果输入的数字从右往左第二位为1，则仅需要追踪fork，
+$ trace 2 usertests forkforkfork
+usertests starting
+test forkforkfork: 407: syscall fork -> 408
+408: syscall fork -> 409
+409: syscall fork -> 410
+410: syscall fork -> 411
+409: syscall fork -> 412
+410: syscall fork -> 413
+409: syscall fork -> 414
+411: syscall fork -> 415
+
+```
+
+理解了需求，再结合前文提到的系统调用过程，可以想想我们为了完成任务可以做些什么？
+首先，一个完整的系统调用从一个用户态的`shell`函数开始，trace.c文件已经提供给了我们：
+```c
+#include "kernel/param.h"  
+#include "kernel/types.h"  
+#include "kernel/stat.h"  
+#include "user/user.h"  
+  
+int  
+main(int argc, char *argv[])  
+{  
+    int i;  
+    //存储待跟踪程序的名称和参数  
+    char *nargv[MAXARG];  
+  
+    //保证trace的参数不少于三个，并且跟踪的系统调用号在0-99之间  
+    if(argc < 3 || (argv[1][0] < '0' || argv[1][0] > '9')){  
+        fprintf(2, "Usage: %s mask command\n", argv[0]);  
+        exit(1);  
+    }  
+    //调用trace系统调用，传入待跟踪系统调用号  
+    if (trace(atoi(argv[1])) < 0) {  
+        fprintf(2, "%s: trace failed\n", argv[0]);  
+        exit(1);  
+    }  
+    //保存待跟踪程序的名称和参数  
+    for(i = 2; i < argc && i < MAXARG; i++){  
+        nargv[i-2] = argv[i];  
+    }  
+    //运行待跟踪的程序  
+    exec(nargv[0], nargv);  
+    exit(0);  
+}
+```
+由于trace的语法规定了，第二个参数必须是待追踪系统调用的数字，因此具体的执行逻辑就是通过`argv[2]`取出这个数字，然后传递到内核态，然后执行一系列的操作。
+
+当我们需要完成一个系统调用，有了用户态的代码，自然需要增加对该系统调用的用户态声明，即在`user/user.h`文件中新增trace的系统调用声明`int trace(int);`
+
+有了声明就需要有实现，但这个实现不是真正的函数实现，而是凭借`ecall`指令进入内核态，这个部分是`usys.pl`负责完成，因此需要在代码中增添`entry(trace)`
+
+`entry(trace)`，将trace的系统调用名称放入a7寄存器，下一步就是通过系统调用名称在系统调用表中找到对应的系统调用编号。因此需要在`kernel/syscall.h`中新增`#define SYS_trace  22`，并且在`kernel/syscall.c`中增添`sys_trace`的函数声明`extern uint64 sys_trace(void);`，在系统调用表中新增`SYS_trace`（即22号调用）到函数实现的映射关系，`[SYS_trace]   sys_trace,`
+
+最后，这是个和进程相关的系统调用，因此在`kernel/sysproc.c`中新增`sys_trace`函数的实现。
+
+完成了前面的步骤，看着下面空荡荡的函数代码，我们应该怎么去完成一个trace任务呢？
+```c
+uint64  
+sys_trace(void)  
+{  
+
+  return 0;  
+}
+```
+
+由于我们可能会追踪任何一个系统调用，但我们不可能修改所有系统调用的代码，因此可以想到从他们共有的内容下手，**由于所有的系统调用都是通过`syscall.c中的syscall`函数来执行的，并且所有系统调用的运行参数和结果均保存在`proc`结构体中的`trapframe`结构体中，例如a7保存当前进程系统调用的编号，a0表示系统调用执行的结果。因此只需要`proc结构体 + syscall函数`，我们就可以达成任务目标。**
+
+可以考虑先在proc结构体中添加一个标记，作为判断执行trace的判断标准，然后在syscall添加一段逻辑：如果当前proc对应的标记为真，则打印输出当前系统调用的结果。
+
+总结以上过程：
+1. 在proc结构体中添加标记：`int trace_mask;  `
+2. 修改`syscall`函数：`num`是系统调用号，如果`（1 << num）与mask（用户输入的值）的&运算结果为1`，则说明需要执行`trace`操作，例如如果`mask`的第二位和第六位都为1，则`num`为`read`和`fork`时就需要执行`trace`操作。
+    注意：由于在内核态只能拿到系统调用编号，但是用户希望在看到的是系统调用的名称，因此还需要一个表格，建立从系统调用编号到系统调用名称的映射，也就是下面代码中的`syscalls_name`
+    ```c
+	//lab2 trace 添加识别名  
+    char* syscalls_name[23] = {"", "fork", "exit", "wait", "pipe", "read", "kill",                "exec",  "fstat", "chdir", "dup", "getpid", "sbrk", "sleep", "uptime",                   "open", "write", "mknod", "unlink", "link", "mkdir", "close", "trace"};
+    
+    void  
+	syscall(void)  
+	{  
+	  int num;  
+	  struct proc *p = myproc();  
+	  
+	  num = p->trapframe->a7;  
+	  if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {  
+	    p->trapframe->a0 = syscalls[num]();  
+	    //---------------------添加的部分--------------------------------------
+	    if(p->trace_mask & (1 << num)){  
+	    printf("%d: syscall %s -> %d\n",p->pid,syscalls_name[num],p->trapframe->a0);  
+	    }  
+	    //--------------------------------------------------------------------
+	  } else {  
+	    printf("%d %s: unknown sys call %d\n",  
+	            p->pid, p->name, num);  
+	    p->trapframe->a0 = -1;  
+	  }  
+	}
+```
+
+由此可见，trace操作的核心代码并不在`sys_trace`函数中，而是在`syscall`函数，那么`sys_trace`函数是干什么用的？
+
+答案：取参数。用户态的trace.c代码中写明，使用trace时会传递一个参数，表示需要监视的系统调用号，而函数传参则是通过寄存器，第一个参数保存在a0寄存器，取参数需要使用`syscall.c中的argraw，argaddr，argint`三个函数，具体的实现可以看代码，`argraw(n)`是获取了发生中断时，$a_n$寄存器对应的值。
+
+```c
+
+static uint64  
+argraw(int n)  
+{  
+  struct proc *p = myproc();  
+  switch (n) {  
+  case 0:  
+    return p->trapframe->a0;  
+  case 1:  
+    return p->trapframe->a1;  
+  case 2:  
+    return p->trapframe->a2;  
+  case 3:  
+    return p->trapframe->a3;  
+  case 4:  
+    return p->trapframe->a4;  
+  case 5:  
+    return p->trapframe->a5;  
+  }  
+  panic("argraw");  
+  return -1;  
+}
+ 
+// Fetch the nth 32-bit system call argument.  
+int  
+argint(int n, int *ip)  
+{  
+  *ip = argraw(n);  
+  return 0;  
+}
+
+```
+
+`sys_trace`代码如下，将取回的参数放入proc结构体
+```c
+uint64  
+sys_trace(void)  
+{  
+  int mask;  
+  if(argint(0, &mask) < 0)  
+    return -1;  
+  myproc()->trace_mask = mask;  
+  return 0;  
+}
+```
+
+另外，实验要求fork新诞生的子进程执行系统调用时也要打印出来，因此需要修改fork代码，子进程的`trace_mask`值应与父进程保持一致：`np->trace_mask = p->trace_mask;`
+
+这样整个实验就完成了
+
+## 
